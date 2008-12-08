@@ -1,0 +1,246 @@
+#!/usr/bin/python
+
+"""
+#TODO: More logging for failures and exception handling
+"""
+
+import util
+from store import Store
+from store import ItemType
+from container import Container
+from entry import Entry
+from commands import Commands
+
+from getpass import getpass
+import pickle
+import sys
+import logging
+
+logger = logging.getLogger("pypm.py")
+
+VERSION = "1.0 (2008)"
+loop = True # global loop var to control exit
+
+store = Store()
+
+def bye():
+  globals()['loop'] = False
+  print "Bye"
+  return False
+
+def help(param):
+  if param is None:
+    print "Available commands:"
+    print Commands.get_command_list().lower()
+  elif Commands.exists(param.upper()):
+    print Commands.get_help(param.upper())
+  else:
+    print "Unknown command. Type just 'help' for a list of available commands."
+
+def mkdir(param):
+  if store.get_current().has_container(param):
+    print "The specified directory already exists."
+  else:
+    # either no entry found or entry is not a directory
+    dir = Container(param)
+    store.get_current().add_item(dir)
+
+def list_directory(param):
+  dir = []
+  entries = []
+  if param is None:
+    # list in current directory
+    for item in store.get_current().get_items():
+      if item.type == ItemType.ENTRY:
+        entries.append(item.get_name())
+      elif item.type == ItemType.DIR:
+        dir.append(item.get_name())
+
+  entries.sort()
+  dir.sort()
+
+  if len(entries) == 0 and len(dir) == 0:
+    pass
+    #print "No results returned"
+  else:
+    for d in dir:
+      print '[' + d + ']'
+
+    for e in entries:
+      print e
+
+def load(param):
+  """Open the specfied DB"""
+  passwd = getpass("Password: ")
+  if param is None:
+    # open the default
+    store.load(password=passwd, filename="db.pass")
+  else:
+    # open the specified
+    store.load(password=passwd, filename=param)
+
+def save():
+  """Save the current DB"""
+  # save the db
+  store.set_password("test")
+  store.save()
+
+def change_directory(param):
+  if param is None:
+    # show current directory
+
+    if store.get_current().get_name() is None:
+      print "/"
+    else:
+      print store.get_current().get_full_path()
+  else:
+    if param.upper() == "..":
+      # change to parent of current
+      parent = store.get_current().get_parent()
+      if parent != None:
+        store.set_current(parent)
+    elif param.upper() == "/":
+      # change to root
+      store.set_current(store.get_root())
+    elif store.get_current().has_container(param):
+      # change to specified directory
+      new_cur = store.get_current().get_item_by_name(param)
+      if new_cur is None or new_cur.type != ItemType.DIR:
+        print "Invalid directory '" + param + "'."
+      else:
+        store.set_current(new_cur)
+    else:
+      print "Directory not found."
+
+def add_entry(param):
+  name = param
+  if param is None:
+    # no name given, enter prompt loop
+    while True:
+      name = None
+      # prompt for a name
+      name = raw_input("Entry name? ")
+
+      if store.get_current().has_entry(name):
+        # entry with that name already exists
+        print "An entry with that name already exists, please choose another."
+      elif len(name) != 0:
+        # entry name free or existing is not an entry, continue...
+        break
+  else:
+    # name supplied, check if it already exists
+    if store.get_current().has_entry(param):
+      print "An entry with that name already exists, please choose another."
+      return
+
+  user_name = raw_input("User name? ")
+
+  while True:
+    # loop until passwords match
+    password = getpass("Password? ")
+    repassword = getpass("Re-enter password? ")
+
+    if password == repassword:
+      break
+    else:
+      print "Passwords do not match, please try again."
+
+  if not util.confirm_prompt("Create entry? [Y/n] ", True):
+    print "Entry not created."
+    return
+
+  entry = Entry()
+  entry.set_name(name)
+  entry.set_user_name(user_name)
+  entry.set_password(password)
+
+  store.get_current().add_item(entry)
+  print "created..."
+
+def remove(param):
+  if param is None:
+    # shouldn't get here, but incase we do
+    return
+
+  if not store.get_current().has_entry(param) and \
+    not store.get_current().has_container(param):
+    print "Unable to delete '" + param + "'. No such entry or directory."
+  else:
+    item = store.get_current().get_item_by_name(param)
+    if item.type == ItemType.DIR:
+      print "Warning: You are about to delete a directory. \n" + \
+        "This will also delete all entries and directories it contains."
+
+    if util.confirm_prompt("Delete? [y/N] ", False):
+      # do the delete
+      store.get_current().remove_item(item)
+    else:
+      # not deleted
+      pass
+
+def show_entry(param):
+  if not store.get_current().has_entry(param):
+    print "Unable to show entry. '" + param + "' not found."
+    return
+
+  item = store.get_current().get_item_by_name(param)
+  print "Name:      " + item.get_name()
+  print "User name: " + item.get_user_name()
+  print "Password:  " + item.get_password()
+
+def _recursive_find(dirs, pattern):
+	matches = []
+	for d in dirs:
+		entries = d.get_entries()
+		for e in entries:
+			if e.get_name() == pattern:
+				matches.append(e)
+	return matches
+
+def find_item(param):  
+  for e in _recursive_find(store.get_root().get_containers(), param):
+		print e.get_container().get_full_path() + '/' + e.get_name()
+
+def handle_args(*args):
+  return True
+
+def main(*args):    
+  # link the commands
+  Commands.set_method("EXIT", bye)
+  Commands.set_method("HELP", help)
+  Commands.set_method("MKDIR", mkdir)
+  Commands.set_method("LS", list_directory)
+  Commands.set_method("OPEN", load)
+  Commands.set_method("SAVE", save)
+  Commands.set_method("CD", change_directory)
+  Commands.set_method("ADD", add_entry)
+  Commands.set_method("RM", remove)
+  Commands.set_method("SHOW", show_entry)
+  Commands.set_method("FIND", find_item)
+
+  print "Welcome to pypm " + VERSION
+  print "Type 'help' or '?' for help."
+  print ""
+
+  while loop:
+    input = raw_input(store.get_current().get_full_path() + " # ")
+
+    input = input.strip()
+
+    command = param = None
+    if input.find(' ') > -1:
+      command, param = input.split(' ')
+    else:
+      command = input
+
+    if Commands.parse(command, param) == False:
+      print "Invalid command. Type 'help' or '?' for help."
+
+
+# ENTRY POINT
+if __name__ == "__main__":
+  if len(sys.argv) > 1:
+    if (handle_args(sys.argv[1:])):
+      sys.exit()
+    
+  main(sys.argv[1:])
